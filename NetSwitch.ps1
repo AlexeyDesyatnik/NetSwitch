@@ -6,14 +6,17 @@
       NetSwitch.bat                                   — окно с профилями
       NetSwitch.bat -Profile "Кабинет"                — применить профиль без окна
       NetSwitch.bat -Profile DHCP -Adapter "Ethernet" — вернуть автонастройку
+      NetSwitch.bat -Proxy On | Off | Toggle          — системный прокси без окна
 
     Профили хранятся в profiles.json рядом со скриптом (создаётся при первом запуске).
-    Нужны права администратора — скрипт сам запросит их через UAC.
+    Нужны права администратора — скрипт сам запросит их через UAC
+    (кроме запуска только с -Proxy: прокси — настройка пользователя, ей админ не нужен).
 #>
 [CmdletBinding()]
 param(
     [Alias('Profile')][string]$ProfileName,
-    [string]$Adapter
+    [string]$Adapter,
+    [string]$Proxy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,10 +29,12 @@ $DhcpNames  = @('DHCP', 'auto', 'авто')
 
 # ---------- Права администратора ----------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$needAdmin = $ProfileName -or -not $Proxy
+if ($needAdmin -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$ScriptPath`"")
     if ($ProfileName) { $argList += @('-Profile', "`"$ProfileName`"") }
     if ($Adapter)     { $argList += @('-Adapter', "`"$Adapter`"") }
+    if ($Proxy)       { $argList += @('-Proxy', "`"$Proxy`"") }
     try { Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList $argList } catch { }
     exit
 }
@@ -155,27 +160,174 @@ function Show-Message([string]$Text, [string]$Icon = 'Information') {
     [void][System.Windows.Forms.MessageBox]::Show($Text, 'NetSwitch', 'OK', $Icon)
 }
 
-# ---------- Режим без окна (для ярлыков) ----------
-if ($ProfileName) {
-    try {
-        $cfg = Get-Config
-        $adName = if ($Adapter) { $Adapter } else { $cfg.DefaultAdapter }
-        if (-not $adName) { throw 'Не указан адаптер. Добавь -Adapter "Имя" или один раз примени профиль из окна — адаптер запомнится.' }
-        $ad = Get-NetAdapter -Name $adName -ErrorAction SilentlyContinue
-        if (-not $ad) { throw "Адаптер '$adName' не найден." }
+# ---------- Системный прокси ----------
+# Ручной прокси WinINet (Параметры → Сеть и Интернет → Прокси) текущего пользователя.
+# Читаем из реестра (быстро), меняем через InternetSetOption: так обновляется и
+# DefaultConnectionSettings, и запущенные программы сразу узнают о смене.
+$InetSettingsKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 
-        if ($ProfileName -in $DhcpNames) {
-            Set-AdapterDhcp $ad.ifIndex
-            $what = 'автоматически (DHCP)'
-        } else {
-            $p = @($cfg.Profiles) | Where-Object { $_.Name -eq $ProfileName } | Select-Object -First 1
-            if (-not $p) { throw "Профиль '$ProfileName' не найден в profiles.json." }
-            $d = @($p.DNS)
-            $s = Get-ValidatedSettings $p.IP $p.Mask $p.Gateway $d[0] $d[1]
-            Set-AdapterStatic $ad.ifIndex $s.IP $s.Mask $s.Gateway $s.DNS
-            $what = "профиль «$($p.Name)» ($($s.IP))"
+$ProxyApiSource = @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class NetSwitchProxy {
+    const int OptionRefresh = 37, OptionSettingsChanged = 39, OptionPerConnection = 75;
+    const int ConnFlags = 1, ConnProxyServer = 2, ConnProxyBypass = 3;
+    const int ProxyTypeDirect = 1, ProxyTypeProxy = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct FileTime { public int Low, High; }
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct OptionValue {
+        [FieldOffset(0)] public int Int;
+        [FieldOffset(0)] public IntPtr Ptr;
+        [FieldOffset(0)] public FileTime Time;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct Option { public int Id; public OptionValue Value; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct OptionList { public int Size; public IntPtr Connection; public int Count; public int Error; public IntPtr Options; }
+
+    [DllImport("wininet.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool InternetSetOption(IntPtr handle, int option, IntPtr buffer, int length);
+
+    [DllImport("wininet.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool InternetQueryOption(IntPtr handle, int option, IntPtr buffer, ref int length);
+
+    // Connection = NULL — настройки локальной сети (Ethernet / Wi-Fi)
+    static void Call(Option[] opts, bool query) {
+        int optSize = Marshal.SizeOf(typeof(Option));
+        int listSize = Marshal.SizeOf(typeof(OptionList));
+        IntPtr optPtr = Marshal.AllocHGlobal(optSize * opts.Length);
+        IntPtr listPtr = Marshal.AllocHGlobal(listSize);
+        try {
+            for (int i = 0; i < opts.Length; i++)
+                Marshal.StructureToPtr(opts[i], new IntPtr(optPtr.ToInt64() + i * optSize), false);
+            var list = new OptionList { Size = listSize, Count = opts.Length, Options = optPtr };
+            Marshal.StructureToPtr(list, listPtr, false);
+            int len = listSize;
+            bool ok = query
+                ? InternetQueryOption(IntPtr.Zero, OptionPerConnection, listPtr, ref len)
+                : InternetSetOption(IntPtr.Zero, OptionPerConnection, listPtr, len);
+            if (!ok) throw new Win32Exception();
+            if (query)
+                for (int i = 0; i < opts.Length; i++)
+                    opts[i] = (Option)Marshal.PtrToStructure(new IntPtr(optPtr.ToInt64() + i * optSize), typeof(Option));
+        } finally {
+            Marshal.FreeHGlobal(listPtr);
+            Marshal.FreeHGlobal(optPtr);
         }
-        Show-Message "$($ad.Name): $what"
+    }
+
+    public static void Set(bool enable) { Set(enable, null, null); }
+
+    // server / bypass = null — оставить как есть. Автоопределение и PAC-скрипт не трогаем.
+    public static void Set(bool enable, string server, string bypass) {
+        var cur = new[] { new Option { Id = ConnFlags } };
+        Call(cur, true);
+        int flags = (cur[0].Value.Int & ~ProxyTypeProxy) | ProxyTypeDirect | (enable ? ProxyTypeProxy : 0);
+
+        var opts = new List<Option> { new Option { Id = ConnFlags, Value = new OptionValue { Int = flags } } };
+        var strings = new List<IntPtr>();
+        try {
+            if (server != null) {
+                strings.Add(Marshal.StringToHGlobalUni(server));
+                opts.Add(new Option { Id = ConnProxyServer, Value = new OptionValue { Ptr = strings[strings.Count - 1] } });
+            }
+            if (bypass != null) {
+                strings.Add(Marshal.StringToHGlobalUni(bypass));
+                opts.Add(new Option { Id = ConnProxyBypass, Value = new OptionValue { Ptr = strings[strings.Count - 1] } });
+            }
+            Call(opts.ToArray(), false);
+        } finally {
+            foreach (IntPtr p in strings) Marshal.FreeHGlobal(p);
+        }
+        InternetSetOption(IntPtr.Zero, OptionSettingsChanged, IntPtr.Zero, 0);
+        InternetSetOption(IntPtr.Zero, OptionRefresh, IntPtr.Zero, 0);
+    }
+}
+'@
+
+function Get-ProxyState {
+    $p = Get-ItemProperty -LiteralPath $InetSettingsKey -ErrorAction SilentlyContinue
+    [pscustomobject]@{
+        Enabled = [bool]($p -and $p.ProxyEnable -eq 1)
+        Server  = if ($p) { [string]$p.ProxyServer } else { '' }
+        Bypass  = if ($p) { [string]$p.ProxyOverride } else { '' }
+    }
+}
+
+# Без $Server — только включить/выключить, адрес и исключения остаются прежними
+function Set-SystemProxy([bool]$Enable, $Server, $Bypass) {
+    if (-not ('NetSwitchProxy' -as [type])) { Add-Type -TypeDefinition $ProxyApiSource }
+    if ($null -eq $Server) { [NetSwitchProxy]::Set($Enable) }
+    else                   { [NetSwitchProxy]::Set($Enable, [string]$Server, [string]$Bypass) }
+}
+
+function Resolve-ProxyServer([string]$s) {
+    $s = "$s".Trim()
+    if (-not $s) { throw 'Не указан адрес прокси (пример: 127.0.0.1:8080)' }
+    # «http=host:port;https=host:port» и «socks=host:port» — как в Windows, проверяем только пробелы
+    $ok = $s -notmatch '\s' -and (
+        $s -match '[=;]' -or
+        ($s -match '^(?:[a-z]+://)?(?:\[[0-9a-f:.]+\]|[^:/\[\]]+):(\d{1,5})$' -and [int]$Matches[1] -in 1..65535))
+    if (-not $ok) { throw "Неверный адрес прокси: '$s' (нужно адрес:порт, например 127.0.0.1:8080)" }
+    $s
+}
+
+# Исключения: «<local>» — флажок «Не использовать для локальных адресов», остальное сохраняем как было
+function Join-ProxyBypass([string]$Current, [bool]$Local) {
+    $items = @("$Current".Split(';') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne '<local>' })
+    if ($Local) { $items += '<local>' }
+    $items -join ';'
+}
+
+function Invoke-ProxyCommand([string]$Action) {
+    $st = Get-ProxyState
+    $on = switch -Regex ($Action.Trim()) {
+        '^on$'     { $true }
+        '^off$'    { $false }
+        '^toggle$' { -not $st.Enabled }
+        default    { throw "Неизвестное значение -Proxy: '$Action' (нужно On, Off или Toggle)" }
+    }
+    if ($on -and -not $st.Server) { throw 'Адрес прокси не задан. Один раз включи прокси из окна NetSwitch — адрес запомнится.' }
+    Set-SystemProxy $on
+    if ($on) { "Прокси включён: $($st.Server)" } else { 'Прокси выключен' }
+}
+
+function Invoke-ProfileCommand {
+    $cfg = Get-Config
+    $adName = if ($Adapter) { $Adapter } else { $cfg.DefaultAdapter }
+    if (-not $adName) { throw 'Не указан адаптер. Добавь -Adapter "Имя" или один раз примени профиль из окна — адаптер запомнится.' }
+    $ad = Get-NetAdapter -Name $adName -ErrorAction SilentlyContinue
+    if (-not $ad) { throw "Адаптер '$adName' не найден." }
+
+    if ($ProfileName -in $DhcpNames) {
+        Set-AdapterDhcp $ad.ifIndex
+        $what = 'автоматически (DHCP)'
+    } else {
+        $p = @($cfg.Profiles) | Where-Object { $_.Name -eq $ProfileName } | Select-Object -First 1
+        if (-not $p) { throw "Профиль '$ProfileName' не найден в profiles.json." }
+        $d = @($p.DNS)
+        $s = Get-ValidatedSettings $p.IP $p.Mask $p.Gateway $d[0] $d[1]
+        Set-AdapterStatic $ad.ifIndex $s.IP $s.Mask $s.Gateway $s.DNS
+        $what = "профиль «$($p.Name)» ($($s.IP))"
+    }
+    "$($ad.Name): $what"
+}
+
+# ---------- Режим без окна (для ярлыков) ----------
+if ($ProfileName -or $Proxy) {
+    try {
+        $done = @()
+        if ($ProfileName) { $done += Invoke-ProfileCommand }
+        if ($Proxy)       { $done += Invoke-ProxyCommand $Proxy }
+        Show-Message ($done -join "`r`n")
     } catch {
         Show-Message $_.Exception.Message 'Error'
     }
@@ -198,7 +350,7 @@ function New-Ctl([string]$Type, [int]$X, [int]$Y, [int]$W, [int]$H, $Text = $nul
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'NetSwitch — настройки сети'
-$form.ClientSize = New-Object System.Drawing.Size(560, 484)
+$form.ClientSize = New-Object System.Drawing.Size(560, 580)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
@@ -245,10 +397,27 @@ $btnShortcut = New-Ctl Button 372 210 150 28 'Ярлык на рабочий с�
 $grpProfiles.Controls.AddRange(@($btnTake, $btnSave, $btnDelete, $btnShortcut))
 $form.Controls.Add($grpProfiles)
 
+# Системный прокси
+$grpProxy      = New-Ctl GroupBox 12 438 536 90 'Системный прокси'
+$lblProxyAddr  = New-Ctl Label 10 27 60 20 'Адрес:'
+$tbProxy       = New-Ctl TextBox 75 24 180 23
+$chkProxyLocal = New-Ctl CheckBox 268 25 258 22 'Не использовать для локальных адресов'
+$lblProxyState = New-Ctl Label 10 61 250 20
+$lblProxyState.AutoEllipsis = $true
+$btnProxyOn    = New-Ctl Button 268 54 82 28 'Включить'
+$btnProxyOff   = New-Ctl Button 356 54 82 28 'Выключить'
+$btnProxyLnk   = New-Ctl Button 444 54 82 28 'Ярлык'
+$grpProxy.Controls.AddRange(@($lblProxyAddr, $tbProxy, $chkProxyLocal, $lblProxyState, $btnProxyOn, $btnProxyOff, $btnProxyLnk))
+$form.Controls.Add($grpProxy)
+
+$tips = New-Object System.Windows.Forms.ToolTip
+$tips.SetToolTip($tbProxy, 'адрес:порт, например 127.0.0.1:8080')
+$tips.SetToolTip($btnProxyLnk, 'Ярлык на рабочий стол: включает / выключает прокси без окна и без UAC')
+
 # Низ окна
-$btnApply = New-Ctl Button 12 440 160 34 'Применить'
+$btnApply = New-Ctl Button 12 536 160 34 'Применить'
 $btnApply.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-$lblStatus = New-Ctl Label 185 449 363 20 'Двойной щелчок по профилю — применить сразу'
+$lblStatus = New-Ctl Label 185 545 363 20 'Двойной щелчок по профилю — применить сразу'
 $lblStatus.AutoEllipsis = $true
 $lblStatus.ForeColor = 'DimGray'
 $form.Controls.AddRange(@($btnApply, $lblStatus))
@@ -401,31 +570,69 @@ function Remove-SelectedProfile {
     Set-Status "Профиль «$name» удалён"
 }
 
+function New-DesktopShortcut([string]$Title, [string]$Arguments, [string]$Description) {
+    $file = ($Title -replace '[\\/:*?"<>|]', '_') + '.lnk'
+    $path = Join-Path ([Environment]::GetFolderPath('Desktop')) $file
+    try {
+        $sh  = New-Object -ComObject WScript.Shell
+        $lnk = $sh.CreateShortcut($path)
+        $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" $Arguments"
+        $lnk.WorkingDirectory = $ScriptDir
+        $lnk.Description = $Description
+        $lnk.Save()
+        Set-Status "Ярлык «$Title» создан на рабочем столе"
+    } catch {
+        Show-Message $_.Exception.Message 'Error'
+    }
+}
+
 function New-ProfileShortcut {
     $a = Get-SelectedAdapter
     $i = $lbProfiles.SelectedIndex
     if (-not $a -or $i -eq 1) { return }
     $pname = if ($i -eq 0) { 'DHCP' } else { [string]$lbProfiles.SelectedItem }
     $title = "Сеть - $pname"
-    $file  = ($title -replace '[\\/:*?"<>|]', '_') + '.lnk'
-    $path  = Join-Path ([Environment]::GetFolderPath('Desktop')) $file
+    New-DesktopShortcut $title "-Profile `"$pname`" -Adapter `"$($a.Name)`"" "$title ($($a.Name))"
+}
+
+function Update-ProxyView {
+    $script:proxyState = Get-ProxyState
+    $tbProxy.Text = $script:proxyState.Server
+    $chkProxyLocal.Checked = (-not $script:proxyState.Server) -or (($script:proxyState.Bypass -split ';') -contains '<local>')
+    if ($script:proxyState.Enabled) {
+        $lblProxyState.Text = "Сейчас: включён ($($script:proxyState.Server))"
+        $lblProxyState.ForeColor = 'DarkGreen'
+    } else {
+        $lblProxyState.Text = 'Сейчас: выключен'
+        $lblProxyState.ForeColor = 'DimGray'
+    }
+    $btnProxyOff.Enabled = $script:proxyState.Enabled
+}
+
+function Switch-ProxyFromForm([bool]$Enable) {
+    $form.Cursor = 'WaitCursor'
     try {
-        $sh  = New-Object -ComObject WScript.Shell
-        $lnk = $sh.CreateShortcut($path)
-        $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Profile `"$pname`" -Adapter `"$($a.Name)`""
-        $lnk.WorkingDirectory = $ScriptDir
-        $lnk.Description = "$title ($($a.Name))"
-        $lnk.Save()
-        Set-Status "Ярлык «$title» создан на рабочем столе"
+        if ($Enable) {
+            $server = Resolve-ProxyServer $tbProxy.Text
+            Set-SystemProxy $true $server (Join-ProxyBypass $script:proxyState.Bypass $chkProxyLocal.Checked)
+            Set-Status "Прокси включён: $server"
+        } else {
+            Set-SystemProxy $false
+            Set-Status 'Прокси выключен'
+        }
     } catch {
+        Set-Status 'Ошибка — см. сообщение' 'Firebrick'
         Show-Message $_.Exception.Message 'Error'
+    } finally {
+        $form.Cursor = 'Default'
+        Update-ProxyView
     }
 }
 
 # События
 $cbAdapter.Add_SelectedIndexChanged({ Update-Current; Select-MatchingProfile })
-$btnRefresh.Add_Click({ Update-AdapterList; Update-Current })
+$btnRefresh.Add_Click({ Update-AdapterList; Update-Current; Update-ProxyView })
 $lbProfiles.Add_SelectedIndexChanged({ Show-SelectedProfile })
 $lbProfiles.Add_DoubleClick({ Invoke-Apply })
 $btnApply.Add_Click({ Invoke-Apply })
@@ -433,11 +640,18 @@ $btnTake.Add_Click({ Copy-Current })
 $btnSave.Add_Click({ Save-AsProfile })
 $btnDelete.Add_Click({ Remove-SelectedProfile })
 $btnShortcut.Add_Click({ New-ProfileShortcut })
+$btnProxyOn.Add_Click({ Switch-ProxyFromForm $true })
+$btnProxyOff.Add_Click({ Switch-ProxyFromForm $false })
+$btnProxyLnk.Add_Click({ New-DesktopShortcut 'Прокси - вкл-выкл' '-Proxy Toggle' 'Включить / выключить системный прокси' })
+# Enter в поле адреса прокси включает прокси, а не применяет сетевой профиль
+$tbProxy.Add_Enter({ $form.AcceptButton = $btnProxyOn })
+$tbProxy.Add_Leave({ $form.AcceptButton = $btnApply })
 $form.Add_Shown({ $form.Activate() })
 
 Update-ProfileList 0
 Update-AdapterList
 Update-Current
 Select-MatchingProfile
+Update-ProxyView
 
 [void]$form.ShowDialog()
