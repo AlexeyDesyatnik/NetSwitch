@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- net40: exe должен запускаться на любом установленном .NET Framework 4.x, см. docs/adr/0001 -->
+    <TargetFramework>net40</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>NetSwitch</RootNamespace>
+    <AssemblyName>NetSwitch</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <Product>NetSwitch</Product>
+    <Description>Быстрая смена сетевых настроек Windows</Description>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <!-- Рядом с exe не должно появляться файлов-спутников -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <InternalsVisibleTo Include="NetSwitch.Tests" />
+  </ItemGroup>
+
+</Project>
