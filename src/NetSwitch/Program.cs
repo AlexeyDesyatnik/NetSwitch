@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Forms;
 using NetSwitch.Diagnostics;
+using NetSwitch.Model;
+using NetSwitch.Profiles;
 using NetSwitch.UI;
 using NetSwitch.Windows;
 
@@ -8,8 +11,6 @@ namespace NetSwitch
 {
     internal static class AppInfo
     {
-        public const string Edition = "разведочная сборка, только чтение";
-
         public static string Version
         {
             get { return typeof(AppInfo).Assembly.GetName().Version!.ToString(3); }
@@ -18,6 +19,9 @@ namespace NetSwitch
 
     internal static class Program
     {
+        // Что инструмент успел сделать до сбоя, должно попасть в отчёт о сбое
+        private static IList<string> _applyLog = new List<string>();
+
         [STAThread]
         private static void Main()
         {
@@ -27,7 +31,15 @@ namespace NetSwitch
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(new WindowsNetworkSystem(), () => WindowsDiagnostics.BuildReport(null)));
+
+            var system = new WindowsNetworkSystem();
+            var applier = new Applier(system);
+            _applyLog = applier.Log;
+
+            var store = new ProfileStore(Application.StartupPath);
+            store.Load();
+
+            Application.Run(new MainForm(system, applier, store, () => WindowsDiagnostics.BuildReport(null, applier.Log)));
         }
 
         // Сбой на чужом компьютере — как раз то, ради чего существует отчёт
@@ -41,7 +53,7 @@ namespace NetSwitch
 
             try
             {
-                Report report = WindowsDiagnostics.BuildReport(error);
+                Report report = WindowsDiagnostics.BuildReport(error, _applyLog);
                 string path = ReportFile.Save(Application.StartupPath, Environment.MachineName, DateTime.Now, report.Text);
                 MessageBox.Show("Отчёт сохранён:\n" + path, "NetSwitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }

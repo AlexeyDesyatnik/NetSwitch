@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using NetSwitch.Model;
 
@@ -18,6 +19,39 @@ namespace NetSwitch.Windows
                 ProxyReader.ReadSystemProxy(user.Sid),
                 ProxyReader.ReadWinHttp(),
                 ProxyReader.ReadPolicy(user.Sid));
+        }
+
+        public void SetAdapterEnabled(Adapter adapter, bool enabled)
+        {
+            AdapterSwitch.SetEnabled(adapter.Id, adapter.Name, enabled);
+        }
+
+        public void ApplyIpv4(Adapter adapter, Ipv4Settings settings)
+        {
+            var failures = new List<string>();
+            foreach (string command in Netsh.Ipv4Commands(adapter.Name, TcpipRegistry.ReadSettings(adapter.Id), settings))
+            {
+                string? failure = Netsh.Run(command);
+                if (failure != null) failures.Add(failure);
+            }
+
+            // netsh иногда сообщает об ошибке, сделав дело (например, «DHCP уже включён»), и наоборот.
+            // Поэтому верим не коду возврата, а тому, что в итоге записано на адаптере.
+            if (TcpipRegistry.ReadSettings(adapter.Id).SameAs(settings)) return;
+
+            throw new InvalidOperationException(failures.Count > 0
+                ? string.Join(" ", failures)
+                : "Windows приняла команды, но настройки адаптера не совпали с заданными.");
+        }
+
+        public void ApplySystemProxy(SystemProxyState state)
+        {
+            ProxyWriter.WriteSystemProxy(InteractiveUserReader.Read(), state);
+        }
+
+        public void ApplyWinHttpProxy(ProxySettings settings)
+        {
+            ProxyWriter.WriteWinHttp(settings);
         }
     }
 }

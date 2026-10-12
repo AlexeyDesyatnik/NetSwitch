@@ -70,5 +70,63 @@ namespace NetSwitch.Tests
         {
             Assert.Equal(expected, Ipv4.PrefixToMask(prefix));
         }
+
+        [Theory]
+        [InlineData("255.255.255.0", "255.255.255.0")]
+        [InlineData("/24", "255.255.255.0")]
+        [InlineData("24", "255.255.255.0")]
+        [InlineData(" /22 ", "255.255.252.0")]
+        [InlineData("32", "255.255.255.255")]
+        public void Reads_mask_in_either_notation(string text, string expected)
+        {
+            Assert.True(Ipv4.TryParseMask(text, out string mask));
+            Assert.Equal(expected, mask);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("/")]
+        [InlineData("33")]
+        [InlineData("-1")]
+        [InlineData("2 4")]
+        [InlineData("255.255.0.255")]
+        [InlineData("255.255.255")]
+        public void Rejects_what_is_not_a_mask(string? text)
+        {
+            Assert.False(Ipv4.TryParseMask(text, out _));
+        }
+
+        [Theory]
+        [InlineData("10.68.12.", "10.68.12.0")]
+        [InlineData("10.68.12", "10.68.12.0")]
+        [InlineData("10.68.", "10.68.0.0")]
+        [InlineData("10", "10.0.0.0")]
+        [InlineData("", "0.0.0.0")]
+        [InlineData("10.68.12.37", "10.68.12.37")]
+        public void Completes_the_beginning_of_an_address_with_zeros(string stub, string expected)
+        {
+            Assert.True(Ipv4.TryCompleteStub(stub, out uint value));
+            Assert.Equal(expected, Ipv4.Format(value));
+        }
+
+        [Theory]
+        [InlineData("10.68.12.1.5")]
+        [InlineData("10..12")]
+        [InlineData("10.300.")]
+        [InlineData("десять")]
+        public void Rejects_what_cannot_begin_an_address(string stub)
+        {
+            Assert.False(Ipv4.TryCompleteStub(stub, out _));
+        }
+
+        [Fact]
+        public void Addresses_are_the_same_regardless_of_spelling()
+        {
+            Assert.True(Ipv4.Same("10.68.12.37", " 010.068.012.037"));
+            Assert.True(Ipv4.Same("", null));
+            Assert.False(Ipv4.Same("10.68.12.37", "10.68.12.38"));
+            Assert.False(Ipv4.Same("10.68.12.37", ""));
+        }
     }
 }

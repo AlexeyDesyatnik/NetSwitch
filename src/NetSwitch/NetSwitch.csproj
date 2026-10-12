@@ -9,7 +9,7 @@
     <RootNamespace>NetSwitch</RootNamespace>
     <AssemblyName>NetSwitch</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Product>NetSwitch</Product>
     <Description>Быстрая смена сетевых настроек Windows</Description>
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -26,6 +26,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="System.Management" />
+    <!-- Разбор JSON; входит в сам .NET Framework, рядом с exe ничего не появляется -->
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Drawing" />
     <InternalsVisibleTo Include="NetSwitch.Tests" />

@@ -15,30 +15,42 @@ namespace NetSwitch.Windows
 
         public static IList<Adapter> ReadAll()
         {
-            var interfaces = new Dictionary<string, NetworkInterface>(StringComparer.OrdinalIgnoreCase);
-            foreach (NetworkInterface item in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                interfaces[item.Id] = item;
-            }
+            Dictionary<string, NetworkInterface> interfaces = StackInterfaces();
 
             var adapters = new List<Adapter>();
             foreach (WmiRow row in Wmi.Query(AdaptersQuery))
             {
                 Adapter adapter = FromWmi(row);
+                adapter.Configured = TcpipRegistry.ReadSettings(adapter.Id);
 
-                TcpipInterfaceValues? configured = TcpipRegistry.Read(adapter.Id);
-                if (configured != null) adapter.Configured = TcpipRegistry.ToSettings(configured);
-
-                // Без соединения стек продолжает отдавать самоназначенный адрес 169.254.x.x и старые DNS
                 NetworkInterface? active;
-                if (adapter.State == AdapterState.Connected && interfaces.TryGetValue(adapter.Id, out active))
+                if (interfaces.TryGetValue(adapter.Id, out active))
                 {
-                    adapter.Active = ReadActive(active);
+                    adapter.IsWireless = active.NetworkInterfaceType == NetworkInterfaceType.Wireless80211;
+
+                    // Без соединения стек продолжает отдавать самоназначенный адрес 169.254.x.x и старые DNS
+                    if (adapter.State == AdapterState.Connected) adapter.Active = ReadActive(active);
                 }
 
                 adapters.Add(adapter);
             }
             return adapters;
+        }
+
+        /// <summary>Выключенных адаптеров в сетевом стеке нет вовсе.</summary>
+        public static bool IsInStack(string adapterId)
+        {
+            return StackInterfaces().ContainsKey(adapterId);
+        }
+
+        private static Dictionary<string, NetworkInterface> StackInterfaces()
+        {
+            var interfaces = new Dictionary<string, NetworkInterface>(StringComparer.OrdinalIgnoreCase);
+            foreach (NetworkInterface item in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                interfaces[item.Id] = item;
+            }
+            return interfaces;
         }
 
         internal static Adapter FromWmi(WmiRow row)
@@ -60,13 +72,15 @@ namespace NetSwitch.Windows
         /// <param name="deviceError">Win32_NetworkAdapter.ConfigManagerErrorCode</param>
         internal static AdapterState StateFrom(int? connectionStatus, int? deviceError)
         {
+            // Выключенный адаптер Windows 7 показывает как «устройство отсутствует» (4), а не как «отключён»
             if (deviceError == DeviceDisabled) return AdapterState.Disabled;
 
             switch (connectionStatus)
             {
                 case 2: return AdapterState.Connected;
-                case 7: return AdapterState.NoLink;
+                // Windows 7 сообщает о выдернутом кабеле и как 7, и как 0
                 case 0:
+                case 7: return AdapterState.NoLink;
                 case 5: return AdapterState.Disabled;
                 case 4:
                 case 6:
@@ -84,6 +98,12 @@ namespace NetSwitch.Windows
             foreach (UnicastIPAddressInformation unicast in properties.UnicastAddresses)
             {
                 if (unicast.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+
+                if (unicast.DuplicateAddressDetectionState == DuplicateAddressDetectionState.Duplicate)
+                {
+                    result.HasConflict = true;
+                    continue;
+                }
 
                 int prefix;
                 string mask = unicast.IPv4Mask != null ? unicast.IPv4Mask.ToString() : "";

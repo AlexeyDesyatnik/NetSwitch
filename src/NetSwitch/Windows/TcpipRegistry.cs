@@ -41,6 +41,12 @@ namespace NetSwitch.Windows
             }
         }
 
+        /// <summary>Настроенное на адаптере; у адаптера без раздела в реестре всё автоматически.</summary>
+        public static Ipv4Settings ReadSettings(string adapterId)
+        {
+            return ToSettings(Read(adapterId) ?? new TcpipInterfaceValues());
+        }
+
         public static Ipv4Settings ToSettings(TcpipInterfaceValues values)
         {
             // Без явного запрета Windows получает адрес автоматически
@@ -65,8 +71,9 @@ namespace NetSwitch.Windows
                 }
             }
 
+            // При адресе вручную Windows не берёт DNS автоматически: пустой список значит «DNS нет»
             settings.Dns.AddRange(Split(values.NameServer));
-            settings.AutoDns = settings.Dns.Count == 0;
+            settings.AutoDns = settings.AutoAddress && settings.Dns.Count == 0;
             return settings;
         }
 

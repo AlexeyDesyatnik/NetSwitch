@@ -40,7 +40,7 @@ namespace NetSwitch.Tests
         [Fact]
         public void Builds_a_full_report_for_this_machine()
         {
-            Report report = WindowsDiagnostics.BuildReport(null);
+            Report report = WindowsDiagnostics.BuildReport(null, new List<string> { "12:00:00 | Профиль «Тест»" });
 
             // Отчёт остаётся в каталоге сборки тестов, чтобы его можно было просмотреть глазами
             File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "machine-report.txt"), report.Text);
@@ -49,6 +49,7 @@ namespace NetSwitch.Tests
             {
                 Assert.Contains("== " + section + " ==", report.Lines);
             }
+            Assert.Contains("  12:00:00 | Профиль «Тест»", report.Lines);
             Assert.False(report.HasErrors, report.Text);
         }
     }

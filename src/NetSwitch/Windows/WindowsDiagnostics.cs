@@ -31,15 +31,19 @@ namespace NetSwitch.Windows
             "DefaultIPGateway", "DNSServerSearchOrder"
         };
 
-        public static Report BuildReport(Exception? crash)
+        /// <param name="applyLog">Шаги применения, выполненные за этот запуск.</param>
+        public static Report BuildReport(Exception? crash, IList<string> applyLog)
         {
             var report = new Report();
             report.Line("NetSwitch — отчёт");
-            report.Value("Версия инструмента", AppInfo.Version + " (" + AppInfo.Edition + ")");
+            report.Value("Версия инструмента", AppInfo.Version);
             report.Value("Создан", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
             report.Value("Компьютер", Environment.MachineName);
 
             if (crash != null) report.Section("Сбой инструмента", () => report.Error(crash));
+
+            report.Section("Применения за этот запуск", () => Lines(report, applyLog));
+            report.Section("Команды netsh за этот запуск", () => Lines(report, Netsh.History));
 
             report.Section("Система", () => SystemInfo(report));
             report.Section("Антивирус", () => Antivirus(report));
@@ -55,10 +59,22 @@ namespace NetSwitch.Windows
             return report;
         }
 
+        private static void Lines(Report report, IList<string> lines)
+        {
+            if (lines.Count == 0) report.Line("(не было)");
+            foreach (string line in new List<string>(lines)) report.Line(line);
+        }
+
         private static void SystemInfo(Report report)
         {
             report.Section("Windows", () =>
             {
+                // Windows 11 называет себя в реестре «Windows 10» и отличается только номером сборки
+                if (Environment.OSVersion.Version.Major == 10 && Environment.OSVersion.Version.Build >= 22000)
+                {
+                    report.Line("Это Windows 11");
+                }
+
                 using (RegistryKey machine = ProxyReader.OpenLocalMachine())
                 using (RegistryKey? key = machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion"))
                 {
@@ -159,7 +175,9 @@ namespace NetSwitch.Windows
                     report.Value("Устройство", adapter.Description);
                     report.Value("GUID", adapter.Id);
                     report.Value("Физический", adapter.IsPhysical);
+                    report.Value("Беспроводной", adapter.IsWireless);
                     report.Value("Состояние", adapter.State);
+                    report.Value("Конфликт адресов", adapter.Active.HasConflict);
                     report.Value("Настроено: адрес автоматически", adapter.Configured.AutoAddress);
                     report.Value("Настроено: адрес", adapter.Configured.Address);
                     report.Value("Настроено: маска", adapter.Configured.Mask);

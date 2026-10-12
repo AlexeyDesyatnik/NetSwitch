@@ -31,6 +31,13 @@ namespace NetSwitch.Model
             return settings;
         }
 
+        public ProxySettings Clone()
+        {
+            var copy = new ProxySettings { Enabled = Enabled, Server = Server, BypassLocal = BypassLocal };
+            copy.Exceptions.AddRange(Exceptions);
+            return copy;
+        }
+
         public string ToBypassList()
         {
             var entries = new List<string>(Exceptions);
@@ -58,6 +65,11 @@ namespace NetSwitch.Model
         public bool AutoDetect { get; set; }
         /// <summary>Адрес сценария автоматической настройки; пусто, если сценарий не задан.</summary>
         public string AutoConfigUrl { get; set; } = "";
+
+        public SystemProxyState Clone()
+        {
+            return new SystemProxyState { Settings = Settings.Clone(), AutoDetect = AutoDetect, AutoConfigUrl = AutoConfigUrl };
+        }
     }
 
     /// <summary>Признаки того, что прокси на управляемом компьютере задаётся групповой политикой.</summary>

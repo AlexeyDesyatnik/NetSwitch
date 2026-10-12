@@ -90,6 +90,17 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
+        public void Manual_address_without_dns_servers_means_no_dns_not_automatic_dns()
+        {
+            var values = new TcpipInterfaceValues { EnableDhcp = 0, IpAddress = new[] { "10.68.12.37" }, SubnetMask = new[] { "255.255.255.0" } };
+
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+
+            Assert.False(settings.AutoDns);
+            Assert.Empty(settings.Dns);
+        }
+
+        [Fact]
         public void Missing_dhcp_flag_means_automatic()
         {
             Assert.True(TcpipRegistry.ToSettings(new TcpipInterfaceValues()).AutoAddress);

@@ -35,7 +35,10 @@ namespace NetSwitch.Tests
         [InlineData(2, 0, AdapterState.Connected)]
         [InlineData(7, 0, AdapterState.NoLink)]
         [InlineData(0, 22, AdapterState.Disabled)]
-        [InlineData(0, 0, AdapterState.Disabled)]
+        // Windows 7, отчёт CAB07: адаптер включён, кабель не подключён
+        [InlineData(0, 0, AdapterState.NoLink)]
+        // Windows 7, отчёт ACER-BIBL: выключенный адаптер выглядит как отсутствующее устройство
+        [InlineData(4, 22, AdapterState.Disabled)]
         [InlineData(5, 0, AdapterState.Disabled)]
         [InlineData(4, 0, AdapterState.Unavailable)]
         [InlineData(6, 0, AdapterState.Unavailable)]
@@ -76,6 +79,46 @@ namespace NetSwitch.Tests
             Assert.Equal("00:11:22:33:44:55", adapter.MacAddress);
             Assert.True(adapter.IsPhysical);
             Assert.Equal(AdapterState.Connected, adapter.State);
+        }
+
+        private static Adapter Wired(string name, AdapterState state)
+        {
+            return new Adapter { Id = "{" + name + "}", Name = name, IsPhysical = true, State = state };
+        }
+
+        [Fact]
+        public void The_only_connected_wired_adapter_is_chosen_by_default()
+        {
+            Adapter connected = Wired("Ethernet", AdapterState.Connected);
+            var adapters = new[]
+            {
+                Wired("Ethernet 2", AdapterState.NoLink),
+                connected,
+                new Adapter { Name = "Wi-Fi", IsPhysical = true, IsWireless = true, State = AdapterState.Connected },
+                new Adapter { Name = "vEthernet", IsPhysical = false, State = AdapterState.Connected }
+            };
+
+            Assert.Same(connected, AdapterChoice.Default(adapters));
+        }
+
+        [Fact]
+        public void The_only_wired_adapter_is_chosen_even_without_link_or_disabled()
+        {
+            Adapter unplugged = Wired("Ethernet", AdapterState.NoLink);
+            Adapter disabled = Wired("Ethernet", AdapterState.Disabled);
+            var wifi = new Adapter { Name = "Wi-Fi", IsPhysical = true, IsWireless = true, State = AdapterState.Connected };
+
+            Assert.Same(unplugged, AdapterChoice.Default(new[] { unplugged, wifi }));
+            Assert.Same(disabled, AdapterChoice.Default(new[] { disabled, wifi }));
+        }
+
+        [Fact]
+        public void No_default_when_the_choice_is_not_obvious()
+        {
+            Assert.Null(AdapterChoice.Default(new[] { Wired("Ethernet", AdapterState.Connected), Wired("Ethernet 2", AdapterState.Connected) }));
+            Assert.Null(AdapterChoice.Default(new[] { Wired("Ethernet", AdapterState.NoLink), Wired("Ethernet 2", AdapterState.NoLink) }));
+            Assert.Null(AdapterChoice.Default(new[] { new Adapter { Name = "Wi-Fi", IsPhysical = true, IsWireless = true, State = AdapterState.Connected } }));
+            Assert.Null(AdapterChoice.Default(new Adapter[0]));
         }
 
         [Fact]

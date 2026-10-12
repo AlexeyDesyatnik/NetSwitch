@@ -3,14 +3,17 @@ using NetSwitch.Model;
 
 namespace NetSwitch.UI
 {
-    /// <summary>Как адаптеры и прокси называются на экране.</summary>
+    /// <summary>Как адаптеры, настройки и прокси называются на экране.</summary>
     internal static class Describe
     {
         private const string Nothing = "—";
+        private const string Automatic = "автоматически";
 
-        public static string State(AdapterState state)
+        public static string State(Adapter adapter)
         {
-            switch (state)
+            if (adapter.Active.HasConflict) return "конфликт адресов";
+
+            switch (adapter.State)
             {
                 case AdapterState.Connected: return "подключён";
                 case AdapterState.NoLink: return "нет соединения";
@@ -26,12 +29,7 @@ namespace NetSwitch.UI
             if (adapter.Active.Addresses.Count > 0) return string.Join(", ", adapter.Active.Addresses);
 
             Ipv4Settings configured = adapter.Configured;
-            if (configured.AutoAddress || configured.Address.Length == 0) return Nothing;
-
-            int prefix;
-            return Ipv4.TryMaskToPrefix(configured.Mask, out prefix)
-                ? configured.Address + "/" + prefix
-                : (configured.Address + " " + configured.Mask).Trim();
+            return configured.AutoAddress || configured.Address.Length == 0 ? Nothing : WithPrefix(configured);
         }
 
         public static string Mode(Ipv4Settings settings)
@@ -52,6 +50,26 @@ namespace NetSwitch.UI
             return servers.Count > 0 ? string.Join(", ", servers) : Nothing;
         }
 
+        // Настройки как они заданы, без оглядки на то, что адаптер имеет сейчас
+
+        public static string ConfiguredAddress(Ipv4Settings settings)
+        {
+            if (settings.AutoAddress) return Automatic;
+            return settings.Address.Length > 0 ? WithPrefix(settings) : "не задан";
+        }
+
+        public static string ConfiguredGateway(Ipv4Settings settings)
+        {
+            if (settings.AutoAddress) return Automatic;
+            return settings.Gateway.Length > 0 ? settings.Gateway : "нет";
+        }
+
+        public static string ConfiguredDns(Ipv4Settings settings)
+        {
+            if (settings.AutoDns) return Automatic;
+            return settings.Dns.Count > 0 ? string.Join(", ", settings.Dns) : "нет";
+        }
+
         public static string Proxy(ProxySettings settings)
         {
             if (!settings.Enabled) return "выключен";
@@ -68,6 +86,26 @@ namespace NetSwitch.UI
             if (state.AutoDetect) text += "; автоопределение включено";
             if (state.AutoConfigUrl.Length > 0) text += "; сценарий: " + state.AutoConfigUrl;
             return text;
+        }
+
+        /// <summary>Содержимое профиля, по строке на каждую настройку.</summary>
+        public static string Profile(Profile profile)
+        {
+            string address = ConfiguredAddress(profile.Ipv4);
+            if (profile.AskAddress) address += " (уточняется)";
+
+            return "Адрес: " + address
+                + "\nШлюз: " + ConfiguredGateway(profile.Ipv4)
+                + "\nDNS: " + ConfiguredDns(profile.Ipv4)
+                + "\nПрокси: " + Proxy(profile.Proxy);
+        }
+
+        private static string WithPrefix(Ipv4Settings settings)
+        {
+            int prefix;
+            return Ipv4.TryMaskToPrefix(settings.Mask, out prefix)
+                ? settings.Address + "/" + prefix
+                : (settings.Address + " " + settings.Mask).Trim();
         }
     }
 }

@@ -28,6 +28,8 @@ namespace NetSwitch.Model
         public string PnpDeviceId { get; set; } = "";
         public string MacAddress { get; set; } = "";
         public bool IsPhysical { get; set; }
+        /// <summary>Известно только для включённого адаптера.</summary>
+        public bool IsWireless { get; set; }
         public AdapterState State { get; set; }
 
         /// <summary>То, что на адаптере настроено (действует и когда соединения нет).</summary>
@@ -43,8 +45,36 @@ namespace NetSwitch.Model
         public string Address { get; set; } = "";
         public string Mask { get; set; } = "";
         public string Gateway { get; set; } = "";
+        /// <summary>При адресе, заданном вручную, DNS всегда задаётся вручную (возможно, пустым списком).</summary>
         public bool AutoDns { get; set; } = true;
         public List<string> Dns { get; } = new List<string>();
+
+        public Ipv4Settings Clone()
+        {
+            var copy = new Ipv4Settings { AutoAddress = AutoAddress, Address = Address, Mask = Mask, Gateway = Gateway, AutoDns = AutoDns };
+            copy.Dns.AddRange(Dns);
+            return copy;
+        }
+
+        /// <summary>Значения, не действующие в текущем режиме (адрес при автополучении), в сравнении не участвуют.</summary>
+        public bool SameAs(Ipv4Settings other)
+        {
+            if (AutoAddress != other.AutoAddress || AutoDns != other.AutoDns) return false;
+
+            if (!AutoAddress)
+            {
+                if (!Ipv4.Same(Address, other.Address) || !Ipv4.Same(Mask, other.Mask) || !Ipv4.Same(Gateway, other.Gateway)) return false;
+            }
+            if (!AutoDns)
+            {
+                if (Dns.Count != other.Dns.Count) return false;
+                for (int i = 0; i < Dns.Count; i++)
+                {
+                    if (!Ipv4.Same(Dns[i], other.Dns[i])) return false;
+                }
+            }
+            return true;
+        }
     }
 
     /// <summary>Адреса, которые адаптер реально имеет в данный момент.</summary>
@@ -54,6 +84,8 @@ namespace NetSwitch.Model
         public List<string> Addresses { get; } = new List<string>();
         public List<string> Gateways { get; } = new List<string>();
         public List<string> Dns { get; } = new List<string>();
+        /// <summary>Windows обнаружила в сети другой компьютер с таким же адресом.</summary>
+        public bool HasConflict { get; set; }
     }
 
     internal static class AdapterClassifier
@@ -75,6 +107,30 @@ namespace NetSwitch.Model
                 if (pnpDeviceId!.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
             }
             return true;
+        }
+    }
+
+    internal static class AdapterChoice
+    {
+        /// <summary>
+        /// Адаптер, к которому настройки применяются по умолчанию: единственный подключённый проводной,
+        /// а если такого нет — единственный проводной. В остальных случаях выбор за человеком.
+        /// </summary>
+        public static Adapter? Default(IEnumerable<Adapter> adapters)
+        {
+            var wired = new List<Adapter>();
+            var connected = new List<Adapter>();
+            foreach (Adapter adapter in adapters)
+            {
+                if (!adapter.IsPhysical || adapter.IsWireless || adapter.State == AdapterState.Unavailable) continue;
+
+                wired.Add(adapter);
+                if (adapter.State == AdapterState.Connected) connected.Add(adapter);
+            }
+
+            if (connected.Count == 1) return connected[0];
+            if (connected.Count == 0 && wired.Count == 1) return wired[0];
+            return null;
         }
     }
 }
