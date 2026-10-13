@@ -35,9 +35,9 @@ namespace NetSwitch.Tests
         [InlineData(2, 0, AdapterState.Connected)]
         [InlineData(7, 0, AdapterState.NoLink)]
         [InlineData(0, 22, AdapterState.Disabled)]
-        // Windows 7, отчёт CAB07: адаптер включён, кабель не подключён
+        // Windows 7, по отчёту разведочной сборки: адаптер включён, кабель не подключён
         [InlineData(0, 0, AdapterState.NoLink)]
-        // Windows 7, отчёт ACER-BIBL: выключенный адаптер выглядит как отсутствующее устройство
+        // Windows 7, по отчёту разведочной сборки: выключенный адаптер выглядит как отсутствующее устройство
         [InlineData(4, 22, AdapterState.Disabled)]
         [InlineData(5, 0, AdapterState.Disabled)]
         [InlineData(4, 0, AdapterState.Unavailable)]

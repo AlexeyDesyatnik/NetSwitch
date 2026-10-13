@@ -11,7 +11,7 @@ namespace NetSwitch.Tests
         private static ProxyState Current(bool processOwner = true, bool managed = false)
         {
             return new ProxyState(
-                new InteractiveUser(@"CAB07\Teacher", "S-1-5-21-1", processOwner),
+                new InteractiveUser(@"OFFICE\ivanov", "S-1-5-21-1", processOwner),
                 new SystemProxyState { Settings = ProxySettings.FromRaw(false, "10.0.68.52:3128", "<local>"), AutoDetect = true },
                 new ProxySettings(),
                 new ProxyPolicy { PerMachine = managed });
@@ -87,7 +87,7 @@ namespace NetSwitch.Tests
 
             Assert.Equal(3, notes.Count);
             Assert.Contains(notes, note => note.Contains("нет соединения"));
-            Assert.Contains(notes, note => note.Contains(@"для пользователя CAB07\Teacher"));
+            Assert.Contains(notes, note => note.Contains(@"для пользователя OFFICE\ivanov"));
             Assert.Contains(notes, note => note.Contains("групповой политикой"));
         }
 

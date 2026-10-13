@@ -143,7 +143,7 @@ namespace NetSwitch.Tests
         [Fact]
         public void Rewriting_bumps_the_counter_and_carries_over_what_windows_keeps_after_the_strings()
         {
-            // Значение с Windows 7 из отчёта CAB07: автоопределение включено, после строк — служебные данные
+            // Значение с Windows 7 из отчёта разведочной сборки: автоопределение включено, после строк — служебные данные
             var original = new List<byte>();
             original.AddRange(new byte[] { 0x46, 0, 0, 0, 0x11, 0, 0, 0, 0x09, 0, 0, 0, 0x0F, 0, 0, 0 });
             original.AddRange(System.Text.Encoding.ASCII.GetBytes("10.0.68.52:3128"));
