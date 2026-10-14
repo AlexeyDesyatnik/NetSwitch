@@ -1,3 +1,7 @@
+## Build and test
+
+`dotnet build NetSwitch.sln -c Release`, `dotnet test NetSwitch.sln`. Requires the .NET SDK. See `docs/build.md`.
+
 ## Agent skills
 
 ### Issue tracker
