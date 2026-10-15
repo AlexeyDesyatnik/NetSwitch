@@ -11,7 +11,7 @@ namespace NetSwitch.Tests
         {
             var values = new TcpipInterfaceValues { EnableDhcp = 1 };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.True(settings.AutoAddress);
             Assert.True(settings.AutoDns);
@@ -31,7 +31,7 @@ namespace NetSwitch.Tests
                 NameServer = "10.0.68.10,10.0.68.11"
             };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.False(settings.AutoAddress);
             Assert.Equal("10.68.12.37", settings.Address);
@@ -46,7 +46,7 @@ namespace NetSwitch.Tests
         {
             var values = new TcpipInterfaceValues { EnableDhcp = 1, NameServer = "8.8.8.8 1.1.1.1" };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.True(settings.AutoAddress);
             Assert.False(settings.AutoDns);
@@ -64,7 +64,7 @@ namespace NetSwitch.Tests
                 DefaultGateway = new[] { "192.168.0.1" }
             };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.Equal("", settings.Address);
             Assert.Equal("", settings.Mask);
@@ -82,7 +82,7 @@ namespace NetSwitch.Tests
                 DefaultGateway = new[] { "", "10.68.12.1" }
             };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.Equal("10.68.12.37", settings.Address);
             Assert.Equal("255.255.255.0", settings.Mask);
@@ -94,16 +94,68 @@ namespace NetSwitch.Tests
         {
             var values = new TcpipInterfaceValues { EnableDhcp = 0, IpAddress = new[] { "10.68.12.37" }, SubnetMask = new[] { "255.255.255.0" } };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
 
             Assert.False(settings.AutoDns);
             Assert.Empty(settings.Dns);
         }
 
         [Fact]
+        public void Manual_settings_waiting_for_connection_are_read_as_manual()
+        {
+            // Так Windows записывает ручные настройки на адаптере с вынутым кабелем
+            var values = new TcpipInterfaceValues
+            {
+                EnableDhcp = 1,
+                DisableDhcpOnConnect = 1,
+                IpAddress = new[] { "192.168.10.50" },
+                SubnetMask = new[] { "255.255.255.0" },
+                DefaultGateway = new[] { "192.168.10.1" },
+                NameServer = "192.168.10.1,192.168.10.2"
+            };
+
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.NoLink);
+
+            Assert.False(settings.AutoAddress);
+            Assert.Equal("192.168.10.50", settings.Address);
+            Assert.Equal("255.255.255.0", settings.Mask);
+            Assert.Equal("192.168.10.1", settings.Gateway);
+            Assert.False(settings.AutoDns);
+            Assert.Equal(new[] { "192.168.10.1", "192.168.10.2" }, settings.Dns);
+        }
+
+        [Fact]
+        public void Waiting_flag_without_manual_address_keeps_address_automatic()
+        {
+            var values = new TcpipInterfaceValues { EnableDhcp = 1, DisableDhcpOnConnect = 1, IpAddress = new[] { "0.0.0.0" } };
+
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.NoLink);
+
+            Assert.True(settings.AutoAddress);
+            Assert.True(settings.AutoDns);
+        }
+
+        [Fact]
+        public void Connected_adapter_follows_dhcp_flag_even_with_manual_settings_waiting()
+        {
+            var values = new TcpipInterfaceValues
+            {
+                EnableDhcp = 1,
+                DisableDhcpOnConnect = 1,
+                IpAddress = new[] { "192.168.10.50" },
+                SubnetMask = new[] { "255.255.255.0" }
+            };
+
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.Connected);
+
+            Assert.True(settings.AutoAddress);
+            Assert.Equal("", settings.Address);
+        }
+
+        [Fact]
         public void Missing_dhcp_flag_means_automatic()
         {
-            Assert.True(TcpipRegistry.ToSettings(new TcpipInterfaceValues()).AutoAddress);
+            Assert.True(TcpipRegistry.ToSettings(new TcpipInterfaceValues(), AdapterState.Connected).AutoAddress);
         }
     }
 }

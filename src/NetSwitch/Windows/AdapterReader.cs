@@ -21,7 +21,7 @@ namespace NetSwitch.Windows
             foreach (WmiRow row in Wmi.Query(AdaptersQuery))
             {
                 Adapter adapter = FromWmi(row);
-                adapter.Configured = TcpipRegistry.ReadSettings(adapter.Id);
+                adapter.Configured = TcpipRegistry.ReadSettings(adapter.Id, adapter.State);
 
                 NetworkInterface? active;
                 if (interfaces.TryGetValue(adapter.Id, out active))
@@ -35,6 +35,16 @@ namespace NetSwitch.Windows
                 adapters.Add(adapter);
             }
             return adapters;
+        }
+
+        /// <summary>Состояние адаптера сейчас; null, если адаптера больше нет.</summary>
+        public static AdapterState? ReadState(string adapterId)
+        {
+            foreach (WmiRow row in Wmi.Query(AdaptersQuery + " AND GUID = '" + adapterId + "'"))
+            {
+                return FromWmi(row).State;
+            }
+            return null;
         }
 
         /// <summary>Выключенных адаптеров в сетевом стеке нет вовсе.</summary>

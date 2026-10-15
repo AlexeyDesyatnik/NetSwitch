@@ -29,6 +29,16 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
+        public void Reads_state_of_a_single_adapter_of_this_machine()
+        {
+            foreach (Adapter adapter in new WindowsNetworkSystem().ReadAdapters())
+            {
+                Assert.Equal(adapter.State, AdapterReader.ReadState(adapter.Id));
+            }
+            Assert.Null(AdapterReader.ReadState("{00000000-0000-0000-0000-000000000000}"));
+        }
+
+        [Fact]
         public void Reads_proxy_of_this_machine()
         {
             ProxyState state = new WindowsNetworkSystem().ReadProxy();

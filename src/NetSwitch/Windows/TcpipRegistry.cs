@@ -9,6 +9,7 @@ namespace NetSwitch.Windows
     internal sealed class TcpipInterfaceValues
     {
         public int? EnableDhcp { get; set; }
+        public int? DisableDhcpOnConnect { get; set; }
         public string[] IpAddress { get; set; } = new string[0];
         public string[] SubnetMask { get; set; } = new string[0];
         public string[] DefaultGateway { get; set; } = new string[0];
@@ -29,10 +30,10 @@ namespace NetSwitch.Windows
             {
                 if (key == null) return null;
 
-                object? dhcp = key.GetValue("EnableDHCP");
                 return new TcpipInterfaceValues
                 {
-                    EnableDhcp = dhcp is int ? (int?)(int)dhcp : null,
+                    EnableDhcp = Number(key.GetValue("EnableDHCP")),
+                    DisableDhcpOnConnect = Number(key.GetValue("DisableDhcpOnConnect")),
                     IpAddress = Strings(key.GetValue("IPAddress")),
                     SubnetMask = Strings(key.GetValue("SubnetMask")),
                     DefaultGateway = Strings(key.GetValue("DefaultGateway")),
@@ -42,15 +43,23 @@ namespace NetSwitch.Windows
         }
 
         /// <summary>Настроенное на адаптере; у адаптера без раздела в реестре всё автоматически.</summary>
-        public static Ipv4Settings ReadSettings(string adapterId)
+        public static Ipv4Settings ReadSettings(string adapterId, AdapterState state)
         {
-            return ToSettings(Read(adapterId) ?? new TcpipInterfaceValues());
+            return ToSettings(Read(adapterId) ?? new TcpipInterfaceValues(), state);
         }
 
-        public static Ipv4Settings ToSettings(TcpipInterfaceValues values)
+        /// <param name="state">Без соединения признак «автоматически» в реестре не окончательный.</param>
+        public static Ipv4Settings ToSettings(TcpipInterfaceValues values, AdapterState state)
         {
+            // Без соединения Windows записывает ручные настройки, но EnableDHCP не сбрасывает
+            // до подключения: о том, что адрес задан вручную, говорит только DisableDhcpOnConnect.
+            // Флаг может остаться от прежних ручных настроек, поэтому без ручного адреса ему не верим
+            bool manualPending = state != AdapterState.Connected
+                && values.DisableDhcpOnConnect == 1
+                && Array.Exists(values.IpAddress, address => !IsBlank(address));
+
             // Без явного запрета Windows получает адрес автоматически
-            var settings = new Ipv4Settings { AutoAddress = values.EnableDhcp != 0 };
+            var settings = new Ipv4Settings { AutoAddress = values.EnableDhcp != 0 && !manualPending };
 
             if (!settings.AutoAddress)
             {
@@ -80,6 +89,11 @@ namespace NetSwitch.Windows
         private static bool IsBlank(string address)
         {
             return address.Trim().Length == 0 || address.Trim() == "0.0.0.0";
+        }
+
+        private static int? Number(object? value)
+        {
+            return value is int ? (int?)(int)value : null;
         }
 
         // Windows разных версий пишет списки то многострочным значением, то одной строкой
