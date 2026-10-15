@@ -39,6 +39,17 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
+        public void Persistent_ipv4_settings_of_physical_adapters_are_reachable()
+        {
+            foreach (Adapter adapter in new WindowsNetworkSystem().ReadAdapters())
+            {
+                if (!adapter.IsPhysical || adapter.State == AdapterState.Disabled || adapter.State == AdapterState.Unavailable) continue;
+
+                DhcpSwitch.EnsureAvailable(adapter.Id, adapter.Name);
+            }
+        }
+
+        [Fact]
         public void Reads_proxy_of_this_machine()
         {
             ProxyState state = new WindowsNetworkSystem().ReadProxy();

@@ -53,10 +53,8 @@ namespace NetSwitch.Windows
         {
             // Без соединения Windows записывает ручные настройки, но EnableDHCP не сбрасывает
             // до подключения: о том, что адрес задан вручную, говорит только DisableDhcpOnConnect.
-            // Флаг может остаться от прежних ручных настроек, поэтому без ручного адреса ему не верим
-            bool manualPending = state != AdapterState.Connected
-                && values.DisableDhcpOnConnect == 1
-                && Array.Exists(values.IpAddress, address => !IsBlank(address));
+            // Флагу верим и без адреса: при подключении Windows по нему выключит DHCP
+            bool manualPending = state != AdapterState.Connected && values.DisableDhcpOnConnect == 1;
 
             // Без явного запрета Windows получает адрес автоматически
             var settings = new Ipv4Settings { AutoAddress = values.EnableDhcp != 0 && !manualPending };
@@ -86,7 +84,7 @@ namespace NetSwitch.Windows
             return settings;
         }
 
-        private static bool IsBlank(string address)
+        internal static bool IsBlank(string address)
         {
             return address.Trim().Length == 0 || address.Trim() == "0.0.0.0";
         }

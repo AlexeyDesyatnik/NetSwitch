@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Management;
 using NetSwitch.Model;
 
 namespace NetSwitch.Windows
@@ -29,10 +30,13 @@ namespace NetSwitch.Windows
         public void ApplyIpv4(Adapter adapter, Ipv4Settings settings)
         {
             var failures = new List<string>();
-            foreach (string command in Netsh.Ipv4Commands(adapter.Name, ReadConfigured(adapter), settings))
+            RunAll(Netsh.Ipv4Commands(adapter.Name, ReadConfigured(adapter), settings), failures);
+
+            // Без соединения «source=dhcp» не снимает ждущие подключения ручные настройки: netsh отвечает,
+            // что DHCP уже включён. Тогда стираем ручные адреса и включаем DHCP в постоянных настройках (ADR 0003).
+            if (settings.AutoAddress && CurrentState(adapter) != AdapterState.Connected && !ReadConfigured(adapter).AutoAddress)
             {
-                string? failure = Netsh.Run(command);
-                if (failure != null) failures.Add(failure);
+                ReturnToDhcp(adapter, failures);
             }
 
             // netsh иногда сообщает об ошибке, сделав дело (например, «DHCP уже включён»), и наоборот.
@@ -44,10 +48,52 @@ namespace NetSwitch.Windows
                 : "Windows приняла команды, но настройки адаптера не совпали с заданными.");
         }
 
+        private static void ReturnToDhcp(Adapter adapter, List<string> failures)
+        {
+            try
+            {
+                // Без MSFT_NetIPInterface (до Windows 8) флаг не снять, а стёртый адрес оставил бы адаптер
+                // совсем без адреса после подключения. Поэтому сначала убеждаемся, что включить DHCP получится.
+                DhcpSwitch.EnsureAvailable(adapter.Id, adapter.Name);
+
+                TcpipInterfaceValues recorded = TcpipRegistry.Read(adapter.Id) ?? new TcpipInterfaceValues();
+                // Если адрес или шлюз не стёрлись, включённый DHCP скрыл бы их от проверки после применения
+                if (RunAll(Netsh.DeleteAddressCommands(adapter.Name, recorded), failures))
+                {
+                    DhcpSwitch.EnablePersistent(adapter.Id, adapter.Name);
+                }
+            }
+            catch (InvalidOperationException e)
+            {
+                failures.Add(e.Message);
+            }
+            catch (ManagementException e)
+            {
+                failures.Add("Windows не смогла включить DHCP на адаптере «" + adapter.Name + "»: " + e.Message);
+            }
+        }
+
+        /// <returns>true, если все команды выполнились успешно.</returns>
+        private static bool RunAll(IList<string> commands, List<string> failures)
+        {
+            int before = failures.Count;
+            foreach (string command in commands)
+            {
+                string? failure = Netsh.Run(command);
+                if (failure != null) failures.Add(failure);
+            }
+            return failures.Count == before;
+        }
+
         // Прочитанное раньше состояние могло устареть: адаптер только что включили или в него воткнули кабель
+        private static AdapterState CurrentState(Adapter adapter)
+        {
+            return AdapterReader.ReadState(adapter.Id) ?? adapter.State;
+        }
+
         private static Ipv4Settings ReadConfigured(Adapter adapter)
         {
-            return TcpipRegistry.ReadSettings(adapter.Id, AdapterReader.ReadState(adapter.Id) ?? adapter.State);
+            return TcpipRegistry.ReadSettings(adapter.Id, CurrentState(adapter));
         }
 
         public void ApplySystemProxy(SystemProxyState state)

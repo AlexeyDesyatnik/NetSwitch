@@ -36,6 +36,20 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
+        public void Recorded_manual_addresses_are_deleted_together_with_gateways()
+        {
+            var values = new TcpipInterfaceValues { IpAddress = new[] { "0.0.0.0", "192.168.10.50", "192.168.11.50" } };
+
+            IList<string> commands = Netsh.DeleteAddressCommands("Подключение по локальной сети", values);
+
+            Assert.Equal(new[]
+            {
+                "interface ipv4 delete address " + Name + " address=192.168.10.50 gateway=all",
+                "interface ipv4 delete address " + Name + " address=192.168.11.50"
+            }, commands);
+        }
+
+        [Fact]
         public void From_manual_to_fully_automatic_resets_both_address_and_dns()
         {
             IList<string> commands = Commands(FakeSystem.Static("10.68.12.37", "10.68.12.1", "8.8.8.8"), new Ipv4Settings());

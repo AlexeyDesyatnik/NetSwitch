@@ -61,6 +61,24 @@ namespace NetSwitch.Windows
             return commands;
         }
 
+        /// <summary>
+        /// Команды, стирающие записанные на адаптере ручные адреса и шлюзы. Нужны там, где «source=dhcp»
+        /// не срабатывает: на адаптере без соединения ручные настройки ждут подключения, а DHCP формально включён.
+        /// </summary>
+        public static IList<string> DeleteAddressCommands(string adapterName, TcpipInterfaceValues values)
+        {
+            var commands = new List<string>();
+            foreach (string address in values.IpAddress)
+            {
+                if (TcpipRegistry.IsBlank(address)) continue;
+
+                // Шлюзы удаляются один раз, вместе с первым адресом
+                commands.Add("interface ipv4 delete address name=\"" + adapterName + "\" address=" + address.Trim()
+                    + (commands.Count == 0 ? " gateway=all" : ""));
+            }
+            return commands;
+        }
+
         /// <summary>Выполняет команду и возвращает описание сбоя; null, если netsh завершился успешно.</summary>
         public static string? Run(string arguments)
         {

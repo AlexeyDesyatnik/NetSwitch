@@ -125,14 +125,17 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
-        public void Waiting_flag_without_manual_address_keeps_address_automatic()
+        public void Waiting_flag_without_address_means_manual_with_no_address()
         {
-            var values = new TcpipInterfaceValues { EnableDhcp = 1, DisableDhcpOnConnect = 1, IpAddress = new[] { "0.0.0.0" } };
+            // Так остаётся адаптер, с которого удалили ручной адрес: при подключении Windows выключит DHCP
+            var values = new TcpipInterfaceValues { EnableDhcp = 1, DisableDhcpOnConnect = 1 };
 
             Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.NoLink);
 
-            Assert.True(settings.AutoAddress);
-            Assert.True(settings.AutoDns);
+            Assert.False(settings.AutoAddress);
+            Assert.Equal("", settings.Address);
+            Assert.False(settings.AutoDns);
+            Assert.Empty(settings.Dns);
         }
 
         [Fact]
