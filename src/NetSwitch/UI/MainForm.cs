@@ -22,6 +22,7 @@ namespace NetSwitch.UI
         private readonly Applier _applier;
         private readonly ProfileStore _store;
         private readonly Func<Report> _buildReport;
+        private readonly IPrompts _prompts;
 
         private readonly ListView _adapters = new ListView();
         private readonly ListViewGroup _physical = new ListViewGroup("Физические");
@@ -33,6 +34,7 @@ namespace NetSwitch.UI
         private readonly Label _profileDetails = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 64, AutoEllipsis = true, ForeColor = SystemColors.GrayText };
         private readonly List<Button> _profileButtons = new List<Button>();
         private readonly List<Button> _storeButtons = new List<Button>();
+        private readonly List<Button> _commands = new List<Button>();
 
         private readonly GroupBox _ipv4Box = new GroupBox { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4) };
         private readonly Ipv4Editor _ipv4 = new Ipv4Editor();
@@ -52,18 +54,20 @@ namespace NetSwitch.UI
         private string? _selectedId;
         private bool _choseDefault;
         private bool _filling;
+        private bool _busy;
 
-        public MainForm(INetworkSystem system, Applier applier, ProfileStore store, Func<Report> buildReport)
+        public MainForm(INetworkSystem system, Applier applier, ProfileStore store, Func<Report> buildReport, IPrompts prompts)
         {
             _system = system;
             _applier = applier;
             _store = store;
             _buildReport = buildReport;
+            _prompts = prompts;
 
-            _toggle = ActionButton("Выключить", delegate { ToggleAdapter(); });
-            _applyIpv4 = ActionButton("Применить IPv4", delegate { ApplyManualIpv4(); });
-            _applyProxy = ActionButton("Применить прокси", delegate { ApplyManualProxy(); });
-            _rollback = ActionButton("Откат", delegate { Rollback(); });
+            _toggle = Command("Выключить", delegate { ToggleAdapter(); });
+            _applyIpv4 = Command("Применить IPv4", delegate { ApplyManualIpv4(); });
+            _applyProxy = Command("Применить прокси", delegate { ApplyManualProxy(); });
+            _rollback = Command("Откат", delegate { Rollback(); });
 
             Text = "NetSwitch " + AppInfo.Version;
             Font = SystemFonts.MessageBoxFont;
@@ -88,6 +92,8 @@ namespace NetSwitch.UI
                 ShowProfiles(0);
                 Reload();
             };
+            // Окно, закрытое посреди применения, не покажет, в каком состоянии остались настройки
+            FormClosing += (sender, e) => { if (_busy) e.Cancel = true; };
             Shown += delegate
             {
                 if (_store.LoadError != null)
@@ -147,7 +153,7 @@ namespace NetSwitch.UI
         {
             var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
             panel.Controls.Add(_toggle);
-            panel.Controls.Add(ActionButton("Обновить", delegate { Reload(); }));
+            panel.Controls.Add(Command("Обновить", delegate { Reload(); }));
             return panel;
         }
 
@@ -159,7 +165,7 @@ namespace NetSwitch.UI
             var proxyBox = new GroupBox { Text = "Ручная правка прокси", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
             proxyBox.Controls.Add(Stack(_proxyEditor, _applyProxy));
 
-            Button save = ActionButton("Сохранить правку как профиль…", delegate { CreateProfile(ProfileFromEditors(), "Профиль из ручной правки"); });
+            Button save = Command("Сохранить правку как профиль…", delegate { CreateProfile(ProfileFromEditors(), "Профиль из ручной правки"); });
             save.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             _storeButtons.Add(save);
 
@@ -188,8 +194,8 @@ namespace NetSwitch.UI
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
             Button apply = ProfileButton("Применить", delegate { ApplyProfile(); }, false);
-            Button create = ActionButton("Создать…", delegate { CreateProfile(new Profile(), "Новый профиль"); });
-            Button current = ActionButton("Из текущих…", delegate { CreateProfile(ProfileFromMachine(), "Профиль из текущих настроек"); });
+            Button create = Command("Создать…", delegate { CreateProfile(new Profile(), "Новый профиль"); });
+            Button current = Command("Из текущих…", delegate { CreateProfile(ProfileFromMachine(), "Профиль из текущих настроек"); });
             _storeButtons.Add(create);
             _storeButtons.Add(current);
             foreach (Button button in new[]
@@ -229,9 +235,17 @@ namespace NetSwitch.UI
         /// <param name="changesStore">Кнопка меняет файл профилей и недоступна, пока он не прочитан.</param>
         private Button ProfileButton(string text, EventHandler onClick, bool changesStore)
         {
-            Button button = ActionButton(text, onClick);
+            Button button = Command(text, onClick);
             _profileButtons.Add(button);
             if (changesStore) _storeButtons.Add(button);
+            return button;
+        }
+
+        // Пока идёт действие, недоступны все кнопки окна: и изменения, и чтение посреди изменения
+        private Button Command(string text, EventHandler onClick)
+        {
+            Button button = ActionButton(text, onClick);
+            _commands.Add(button);
             return button;
         }
 
@@ -265,7 +279,7 @@ namespace NetSwitch.UI
         {
             var panel = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
             panel.Controls.Add(_rollback);
-            panel.Controls.Add(ActionButton("Сохранить отчёт", delegate { SaveReport(); }));
+            panel.Controls.Add(Command("Сохранить отчёт", delegate { SaveReport(); }));
 
             _status.Anchor = AnchorStyles.Left;
             _status.ForeColor = SystemColors.GrayText;
@@ -380,17 +394,34 @@ namespace NetSwitch.UI
             get { return _adapters.SelectedItems.Count > 0 ? (Adapter)_adapters.SelectedItems[0].Tag : null; }
         }
 
+        /// <summary>Тот же адаптер в последнем прочитанном состоянии; null, если его больше нет.</summary>
+        private Adapter? Listed(Adapter adapter)
+        {
+            foreach (Adapter candidate in _all)
+            {
+                if (string.Equals(candidate.Id, adapter.Id, StringComparison.OrdinalIgnoreCase)) return candidate;
+            }
+            return null;
+        }
+
         private void AdapterSelected()
         {
             Adapter? adapter = SelectedAdapter;
             _selectedId = adapter != null ? adapter.Id : null;
 
-            _toggle.Enabled = adapter != null && adapter.State != AdapterState.Unavailable;
             _toggle.Text = adapter != null && adapter.State == AdapterState.Disabled ? "Включить" : "Выключить";
+            EnableAdapterButtons();
 
             _ipv4Box.Text = ManualIpv4 + (adapter != null ? adapter.Name : "адаптер не выбран");
-            _ipv4.Enabled = _applyIpv4.Enabled = adapter != null;
+            _ipv4.Enabled = adapter != null;
             _ipv4.Value = adapter != null ? adapter.Configured : new Ipv4Settings();
+        }
+
+        private void EnableAdapterButtons()
+        {
+            Adapter? adapter = SelectedAdapter;
+            _toggle.Enabled = !_busy && adapter != null && adapter.State != AdapterState.Unavailable;
+            _applyIpv4.Enabled = !_busy && adapter != null;
         }
 
         private void ShowProxy(ProxyState state)
@@ -432,7 +463,7 @@ namespace NetSwitch.UI
             Profile? profile = SelectedProfile;
             _profileDetails.Text = profile != null ? Describe.Profile(profile) : "";
 
-            foreach (Button button in _profileButtons) button.Enabled = profile != null;
+            foreach (Button button in _profileButtons) button.Enabled = !_busy && profile != null;
             if (_store.LoadError != null)
             {
                 foreach (Button button in _storeButtons) button.Enabled = false;
@@ -527,13 +558,14 @@ namespace NetSwitch.UI
 
         private void ApplyProfile()
         {
+            // Двойной щелчок по профилю кнопкой не заблокируешь
             Profile? profile = SelectedProfile;
-            if (profile == null) return;
+            if (profile == null || _busy) return;
 
             Adapter? adapter = SelectedAdapter;
             if (adapter == null)
             {
-                MessageBox.Show(this, "Выберите адаптер, к которому применить профиль.", "NetSwitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _prompts.Tell(this, "Выберите адаптер, к которому применить профиль.", "NetSwitch", MessageBoxIcon.Information);
                 return;
             }
 
@@ -567,16 +599,13 @@ namespace NetSwitch.UI
         {
             if (errors.Count == 0) return true;
 
-            MessageBox.Show(this, string.Join("\n", errors), "NetSwitch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _prompts.Tell(this, string.Join("\n", errors), "NetSwitch", MessageBoxIcon.Warning);
             return false;
         }
 
         private void Confirm(ChangeRequest request, string? addressStub)
         {
-            using (var dialog = new ConfirmForm(request, _proxy, addressStub, "Применить"))
-            {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return;
-            }
+            if (!_prompts.Confirm(this, request, _proxy, addressStub, "Применить")) return;
             Execute(() => _applier.Apply(request), request);
         }
 
@@ -587,19 +616,9 @@ namespace NetSwitch.UI
 
             // В подтверждении «было» — это то, что на адаптере сейчас, а не в момент последнего применения
             var shown = new ChangeRequest { Title = undo.Title, Ipv4 = undo.Ipv4, SystemProxy = undo.SystemProxy, WinHttp = undo.WinHttp };
-            if (undo.Adapter != null)
-            {
-                shown.Adapter = undo.Adapter;
-                foreach (Adapter adapter in _all)
-                {
-                    if (string.Equals(adapter.Id, undo.Adapter.Id, StringComparison.OrdinalIgnoreCase)) shown.Adapter = adapter;
-                }
-            }
+            if (undo.Adapter != null) shown.Adapter = Listed(undo.Adapter) ?? undo.Adapter;
 
-            using (var dialog = new ConfirmForm(shown, _proxy, null, "Откатить"))
-            {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return;
-            }
+            if (!_prompts.Confirm(this, shown, _proxy, null, "Откатить")) return;
             Execute(() => _applier.Rollback(), undo);
         }
 
@@ -609,42 +628,92 @@ namespace NetSwitch.UI
             if (adapter == null) return;
 
             bool enable = adapter.State == AdapterState.Disabled;
-            Cursor = Cursors.WaitCursor;
-            StepResult result;
-            try
-            {
-                result = _applier.SetAdapterEnabled(adapter, enable);
-            }
-            finally
-            {
-                Cursor = Cursors.Default;
-            }
+            StepResult? result = null;
+            InBackground((enable ? "Включение" : "Выключение") + " адаптера «" + adapter.Name + "»",
+                () => result = _applier.SetAdapterEnabled(adapter, enable),
+                () =>
+                {
+                    Reload();
+                    if (!result!.Ok) _prompts.Tell(this, result.Error!, "NetSwitch", MessageBoxIcon.Warning);
+                });
+        }
 
-            Reload();
-            if (!result.Ok) MessageBox.Show(this, result.Error, "NetSwitch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        /// <summary>
+        /// Изменение настроек может идти секундами (включение адаптера — до 15), поэтому выполняется
+        /// вне потока окна; <paramref name="done"/> вызывается снова в потоке окна.
+        /// </summary>
+        private void InBackground(string doing, Action work, Action done)
+        {
+            SetBusy(true);
+            string status = _status.Text;
+            _status.Text = "Выполняется: " + doing + "…";
+
+            var thread = new Thread(() =>
+            {
+                Exception? failure = null;
+                try
+                {
+                    work();
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    SetBusy(false);
+                    _status.Text = status;
+                    // Непредвиденный сбой уходит в общий обработчик, который предложит сохранить отчёт
+                    if (failure != null) throw new InvalidOperationException(failure.Message, failure);
+                    done();
+                });
+            });
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
+        private void SetBusy(bool busy)
+        {
+            _busy = busy;
+            UseWaitCursor = busy;
+            foreach (Button button in _commands) button.Enabled = !busy;
+            if (busy) return;
+
+            // Доступность части кнопок зависит от выбора и от того, есть ли что откатывать;
+            // правку в редакторах не трогаем — её могли не применить
+            EnableAdapterButtons();
+            ProfileSelected();
+            _rollback.Enabled = _applier.CanRollback;
         }
 
         private void Execute(Func<IList<StepResult>> action, ChangeRequest request)
         {
-            IList<StepResult> results;
-            Cursor = Cursors.WaitCursor;
-            try
+            IList<StepResult>? results = null;
+            Exception? readFailure = null;
+            InBackground(request.Title, () =>
             {
-                results = action();
+                try
+                {
+                    results = action();
+                }
+                catch (Exception ex)
+                {
+                    readFailure = ex;
+                    return;
+                }
                 if (request.Ipv4 != null) Thread.Sleep(SettleMs);
-            }
-            catch (Exception ex)
+            }, () =>
             {
-                MessageBox.Show(this, "Ничего не изменено: не удалось прочитать прежние настройки.\n" + ex.Message, "NetSwitch", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            finally
-            {
-                Cursor = Cursors.Default;
-            }
+                if (readFailure != null)
+                {
+                    _prompts.Tell(this, "Ничего не изменено: не удалось прочитать прежние настройки.\n" + readFailure.Message, "NetSwitch", MessageBoxIcon.Error);
+                    return;
+                }
 
-            Reload();
-            ShowResults(results, request);
+                Reload();
+                ShowResults(results!, request);
+            });
         }
 
         private void ShowResults(IList<StepResult> results, ChangeRequest request)
@@ -657,7 +726,8 @@ namespace NetSwitch.UI
                 lines.Add(result.Ok ? "✔ " + result.Title : "✖ " + result.Title + ":\n    " + result.Error);
             }
 
-            Adapter? adapter = SelectedAdapter;
+            // Пока шло действие, в списке могли выбрать другой адаптер
+            Adapter? adapter = request.Adapter != null ? Listed(request.Adapter) : null;
             if (request.Ipv4 != null && adapter != null && adapter.Active.HasConflict)
             {
                 allOk = false;
@@ -670,7 +740,7 @@ namespace NetSwitch.UI
                 lines.Add("Уже запущенным программам может понадобиться перезапуск, чтобы подхватить новый прокси.");
             }
 
-            MessageBox.Show(this, string.Join("\n", lines), request.Title, MessageBoxButtons.OK, allOk ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            _prompts.Tell(this, string.Join("\n", lines), request.Title, allOk ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         // ---------- Отчёт ----------

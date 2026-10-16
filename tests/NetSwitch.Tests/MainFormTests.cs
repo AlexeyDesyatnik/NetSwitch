@@ -18,6 +18,7 @@ namespace NetSwitch.Tests
         private readonly string _folder = Path.Combine(Path.GetTempPath(), "NetSwitch.Tests." + Guid.NewGuid().ToString("N"));
         private readonly FakeSystem _system = new FakeSystem();
         private readonly ProfileStore _store;
+        private readonly FakePrompts _prompts = new FakePrompts();
 
         public MainFormTests()
         {
@@ -52,11 +53,20 @@ namespace NetSwitch.Tests
             {
                 try
                 {
-                    using (var form = new MainForm(_system, new Applier(_system), _store, () => new Report()))
+                    using (var form = new MainForm(_system, new Applier(_system), _store, () => new Report(), _prompts))
                     {
                         form.Show();
                         Application.DoEvents();
-                        check(form);
+                        try
+                        {
+                            check(form);
+                        }
+                        finally
+                        {
+                            // Действие, начатое упавшим тестом, должно закончиться, пока окно ещё живо
+                            _system.Release();
+                            Pump(() => Idle(form));
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -69,6 +79,29 @@ namespace NetSwitch.Tests
             thread.Join();
 
             if (failure != null) throw new InvalidOperationException("Сбой в окне: " + failure, failure);
+        }
+
+        // Обрабатывает сообщения окна, пока действие в фоне не приведёт к ожидаемому
+        private static bool Pump(Func<bool> done)
+        {
+            DateTime deadline = DateTime.Now.AddSeconds(15);
+            while (!done())
+            {
+                if (DateTime.Now > deadline) return false;
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+            return true;
+        }
+
+        private static bool Idle(Control form)
+        {
+            return !AllText(form).Contains("Выполняется");
+        }
+
+        private static void Until(Func<bool> done)
+        {
+            if (!Pump(done)) throw new TimeoutException("Окно не дошло до ожидаемого состояния.");
         }
 
         private static List<T> All<T>(Control root) where T : Control
@@ -187,10 +220,170 @@ namespace NetSwitch.Tests
             OnShownForm(form =>
             {
                 ButtonNamed(form, "Выключить").PerformClick();
+                Until(() => Idle(form));
 
                 Assert.Equal(new[] { "adapter Ethernet off" }, _system.Calls);
                 Assert.Equal("выключен", Find<ListView>(form).Items[0].SubItems[1].Text);
                 Assert.NotNull(ButtonNamed(form, "Включить"));
+            });
+        }
+
+        [Fact]
+        public void Window_stays_responsive_while_the_adapter_is_switching_and_shows_what_is_going_on()
+        {
+            _system.Hold();
+
+            OnShownForm(form =>
+            {
+                ButtonNamed(form, "Выключить").PerformClick();
+                Application.DoEvents();
+
+                Assert.Contains("Выполняется: Выключение адаптера «Ethernet»", AllText(form));
+
+                _system.Release();
+                Until(() => Find<ListView>(form).Items[0].SubItems[1].Text == "выключен");
+                Assert.DoesNotContain("Выполняется", AllText(form));
+                Assert.Empty(_prompts.Told);
+            });
+        }
+
+        [Fact]
+        public void Nothing_else_can_be_changed_while_an_action_is_running()
+        {
+            _store.Profiles.Add(new Profile { Name = "Авто, без прокси" });
+            _store.Profiles.Add(new Profile { Name = "Второй" });
+            string[] changing = { "Применить", "Создать…", "Из текущих…", "Изменить…", "Удалить", "▲", "▼", "Применить IPv4", "Применить прокси", "Сохранить правку как профиль…" };
+            _system.Hold();
+
+            OnShownForm(form =>
+            {
+                ButtonNamed(form, "Выключить").PerformClick();
+                Application.DoEvents();
+
+                // Выбор другого адаптера или профиля не должен возвращать кнопки
+                Find<ListView>(form).Items[1].Selected = true;
+                Find<ListBox>(form).SelectedIndex = 1;
+                Application.DoEvents();
+
+                foreach (string text in changing) Assert.False(ButtonNamed(form, text).Enabled, text);
+                Assert.False(ButtonNamed(form, "Включить").Enabled);
+                Assert.False(ButtonNamed(form, "Откат").Enabled);
+
+                _system.Release();
+                Until(() => Idle(form));
+
+                foreach (string text in changing) Assert.True(ButtonNamed(form, text).Enabled, text);
+                Assert.True(ButtonNamed(form, "Включить").Enabled);
+            });
+        }
+
+        [Fact]
+        public void Window_cannot_be_closed_until_the_action_is_finished()
+        {
+            _system.Hold();
+
+            OnShownForm(form =>
+            {
+                ButtonNamed(form, "Выключить").PerformClick();
+                Application.DoEvents();
+
+                form.Close();
+                Application.DoEvents();
+                Assert.True(form.Visible);
+
+                _system.Release();
+                Until(() => Idle(form));
+                form.Close();
+                Application.DoEvents();
+                Assert.False(form.Visible);
+            });
+        }
+
+        [Fact]
+        public void Profile_is_applied_in_the_background_and_results_follow_the_fresh_state()
+        {
+            _store.Profiles.Add(new Profile { Name = "Офис", Ipv4 = FakeSystem.Static("10.68.12.50", "10.68.12.1"), Proxy = ProxySettings.FromRaw(true, "p:3128", "") });
+            _system.Hold();
+
+            OnShownForm(form =>
+            {
+                ButtonNamed(form, "Применить").PerformClick();
+                Application.DoEvents();
+                Assert.Contains("Выполняется: Профиль «Офис»", AllText(form));
+
+                // Windows замечает конфликт адресов уже после записи; увидеть его можно, только перечитав состояние
+                _system.Adapters[2].Active.HasConflict = true;
+                // Пока применение идёт, можно выбрать другой адаптер — итоги всё равно про тот, к которому применяли
+                Find<ListView>(form).Items[2].Selected = true;
+                _system.Release();
+                Until(() => Idle(form) && _prompts.Told.Count > 0);
+
+                string results = _prompts.Told[0];
+                Assert.StartsWith("Профиль «Офис»: ", results);
+                Assert.Contains("✔ Настройки IPv4 адаптера «Ethernet»", results);
+                Assert.Contains("✔ Системный прокси", results);
+                Assert.Contains("✔ WinHTTP-прокси", results);
+                Assert.Contains("другой компьютер с таким же адресом", results);
+                Assert.Equal(new[] { "ipv4 Ethernet", "system proxy", "winhttp" }, _system.Calls);
+                Assert.True(ButtonNamed(form, "Откат").Enabled);
+            });
+        }
+
+        [Fact]
+        public void Manual_ipv4_edit_survives_when_nothing_could_be_applied()
+        {
+            OnShownForm(form =>
+            {
+                Ipv4Settings edited = FakeSystem.Static("10.68.12.99", "10.68.12.1");
+                Find<Ipv4Editor>(form).Value = edited;
+                _system.ProxyFailure = new InvalidOperationException("нет пользователя");
+                _system.AdaptersFailure = new InvalidOperationException("служба WMI остановлена");
+
+                ButtonNamed(form, "Применить IPv4").PerformClick();
+                Until(() => Idle(form) && _prompts.Told.Count > 0);
+
+                Assert.StartsWith("NetSwitch: Ничего не изменено", _prompts.Told[0]);
+                Assert.True(Find<Ipv4Editor>(form).Value.SameAs(edited));
+            });
+        }
+
+        [Fact]
+        public void When_previous_settings_cannot_be_read_nothing_is_changed_and_that_is_said()
+        {
+            _store.Profiles.Add(new Profile { Name = "Офис" });
+
+            OnShownForm(form =>
+            {
+                _system.ProxyFailure = new InvalidOperationException("нет пользователя");
+                ButtonNamed(form, "Применить").PerformClick();
+                Until(() => Idle(form) && _prompts.Told.Count > 0);
+
+                Assert.Equal(new[] { "NetSwitch: Ничего не изменено: не удалось прочитать прежние настройки.\nнет пользователя" }, _prompts.Told);
+                Assert.Empty(_system.Calls);
+                Assert.False(ButtonNamed(form, "Откат").Enabled);
+                Assert.True(ButtonNamed(form, "Применить").Enabled);
+            });
+        }
+
+        [Fact]
+        public void Rollback_runs_in_the_background_and_shows_its_results()
+        {
+            OnShownForm(form =>
+            {
+                ButtonNamed(form, "Применить прокси").PerformClick();
+                Until(() => Idle(form) && _prompts.Told.Count > 0);
+                _prompts.Told.Clear();
+                _system.Hold();
+
+                ButtonNamed(form, "Откат").PerformClick();
+                Application.DoEvents();
+                Assert.Contains("Выполняется: Откат: Ручная правка прокси", AllText(form));
+
+                _system.Release();
+                Until(() => Idle(form) && _prompts.Told.Count > 0);
+
+                Assert.StartsWith("Откат: Ручная правка прокси: ✔ Системный прокси\n✔ WinHTTP-прокси", _prompts.Told[0]);
+                Assert.False(ButtonNamed(form, "Откат").Enabled);
             });
         }
 

@@ -39,7 +39,7 @@ namespace NetSwitch
             var store = new ProfileStore(Application.StartupPath);
             store.Load();
 
-            Application.Run(new MainForm(system, applier, store, () => WindowsDiagnostics.BuildReport(null, applier.Log)));
+            Application.Run(new MainForm(system, applier, store, () => WindowsDiagnostics.BuildReport(null, applier.Log), new WindowPrompts()));
         }
 
         // Сбой на чужом компьютере — как раз то, ради чего существует отчёт

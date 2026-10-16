@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using NetSwitch.Model;
 
 namespace NetSwitch.Tests
@@ -21,6 +22,8 @@ namespace NetSwitch.Tests
         public SystemProxyState SystemProxy = new SystemProxyState();
         public ProxySettings WinHttp = new ProxySettings();
         public ProxyPolicy Policy = new ProxyPolicy();
+
+        private readonly ManualResetEvent _answer = new ManualResetEvent(true);
 
         public static Adapter Ethernet(AdapterState state = AdapterState.Connected)
         {
@@ -77,8 +80,21 @@ namespace NetSwitch.Tests
             WinHttp = settings.Clone();
         }
 
+        /// <summary>Запись не отвечает, пока не вызван <see cref="Release"/> — как настоящий адаптер, который включается секунды.</summary>
+        public void Hold()
+        {
+            _answer.Reset();
+        }
+
+        public void Release()
+        {
+            _answer.Set();
+        }
+
         private void Do(string call, string kind)
         {
+            // Тест, который забыл отпустить запись или ждёт её в потоке окна, падает, а не висит
+            if (!_answer.WaitOne(TimeSpan.FromSeconds(10))) throw new TimeoutException("Подставной компьютер не дождался Release().");
             Calls.Add(call);
             if (Failing.Contains(kind)) throw new InvalidOperationException("отказ: " + kind);
         }
