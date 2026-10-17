@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Windows.Forms;
 using NetSwitch.Diagnostics;
 using NetSwitch.Model;
@@ -11,9 +12,15 @@ namespace NetSwitch
 {
     internal static class AppInfo
     {
+        // Полная версия с суффиксом: локальную сборку «0.0.0-dev» видно сразу
         public static string Version
         {
-            get { return typeof(AppInfo).Assembly.GetName().Version!.ToString(3); }
+            get
+            {
+                var attribute = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(
+                    typeof(AppInfo).Assembly, typeof(AssemblyInformationalVersionAttribute))!;
+                return attribute.InformationalVersion;
+            }
         }
     }
 

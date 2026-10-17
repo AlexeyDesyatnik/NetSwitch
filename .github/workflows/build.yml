@@ -1,0 +1,57 @@
+# Сборка и тесты на каждый push в main; тег vX.Y.Z — ещё и черновик релиза. См. docs/build.md
+name: Сборка
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Версия из тега
+        if: github.ref_type == 'tag'
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v(\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$') {
+            throw "Тег $env:GITHUB_REF_NAME не похож на vX.Y.Z"
+          }
+          "VERSION=$($Matches[1])" >> $env:GITHUB_ENV
+
+      - name: Сборка
+        run: |
+          $flags = @('-c', 'Release')
+          if ($env:VERSION) { $flags += "-p:Version=$env:VERSION" }
+          dotnet build NetSwitch.sln @flags
+
+      # Тесты Machine читают настройки компьютера, а у виртуальной машины GitHub они не те, что на рабочих машинах
+      - name: Тесты
+        run: dotnet test NetSwitch.sln -c Release --no-build --filter "Category!=Machine"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: NetSwitch
+          path: dist/NetSwitch.exe
+
+      - name: Черновик релиза
+        if: github.ref_type == 'tag'
+        run: |
+          # checkout приносит тег без аннотации, а из неё берётся описание релиза
+          git fetch --force origin "refs/tags/${env:GITHUB_REF_NAME}:refs/tags/${env:GITHUB_REF_NAME}"
+          $flags = @('--draft', '--notes-from-tag', '--title', "NetSwitch $env:VERSION")
+          if ($env:VERSION.StartsWith('0.') -or $env:VERSION.Contains('-')) { $flags += '--prerelease' }
+          gh release create $env:GITHUB_REF_NAME dist/NetSwitch.exe @flags

@@ -9,7 +9,10 @@
     <RootNamespace>NetSwitch</RootNamespace>
     <AssemblyName>NetSwitch</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.0</Version>
+    <!-- Релизная сборка получает версию из тега (-p:Version=…), см. docs/build.md -->
+    <Version>0.0.0-dev</Version>
+    <!-- Без «+хеш коммита»: версия показывается в заголовке окна и в отчёте -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>NetSwitch</Product>
     <Description>Быстрая смена сетевых настроек Windows</Description>
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -32,5 +35,9 @@
     <Reference Include="System.Drawing" />
     <InternalsVisibleTo Include="NetSwitch.Tests" />
   </ItemGroup>
+
+  <Target Name="CopyToDist" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DistPath)" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

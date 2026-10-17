@@ -1,0 +1,10 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- bin и obj всех проектов — в artifacts/ в корне, а не внутри src и tests; нужен .NET SDK 8 или новее -->
+    <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+    <!-- Готовый инструмент для флешки, см. docs/build.md -->
+    <DistPath>$(MSBuildThisFileDirectory)dist\</DistPath>
+  </PropertyGroup>
+
+</Project>

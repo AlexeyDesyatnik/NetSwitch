@@ -1,6 +1,6 @@
 ## Build and test
 
-`dotnet build NetSwitch.sln -c Release`, `dotnet test NetSwitch.sln`. Requires the .NET SDK. See `docs/build.md`.
+`dotnet build NetSwitch.sln -c Release`, `dotnet test NetSwitch.sln`. Requires .NET SDK 8+. Build output goes to `artifacts/`, the finished tool to `dist/NetSwitch.exe`. Releases are built by GitHub Actions from a `vX.Y.Z` tag. See `docs/build.md`.
 
 ## Agent skills
 
