@@ -201,6 +201,41 @@ namespace NetSwitch.Tests
         }
 
         [Fact]
+        public void Selected_adapter_with_address_conflict_stays_red()
+        {
+            _system.Adapters[2].Active.HasConflict = true;
+
+            OnShownForm(form =>
+            {
+                ListView list = Find<ListView>(form);
+                ListViewItem row = list.SelectedItems[0];
+                Assert.Equal("конфликт адресов", row.SubItems[1].Text);
+
+                // Выделение Windows рисует своими цветами поверх цвета строки (#10), поэтому проверяем сам рисунок
+                list.Focus();
+                Application.DoEvents();
+                using (var image = new Bitmap(list.Width, list.Height))
+                {
+                    list.DrawToBitmap(image, new Rectangle(Point.Empty, list.Size));
+                    Assert.True(HasRed(image, row.Bounds), "Строка адаптера с конфликтом адресов нарисована не красным.");
+                }
+            });
+        }
+
+        private static bool HasRed(Bitmap image, Rectangle area)
+        {
+            for (int x = Math.Max(area.Left, 0); x < Math.Min(area.Right, image.Width); x++)
+            {
+                for (int y = Math.Max(area.Top, 0); y < Math.Min(area.Bottom, image.Height); y++)
+                {
+                    Color pixel = image.GetPixel(x, y);
+                    if (pixel.R > 140 && pixel.G < 90 && pixel.B < 90) return true;
+                }
+            }
+            return false;
+        }
+
+        [Fact]
         public void Selecting_a_disabled_adapter_offers_to_enable_it()
         {
             OnShownForm(form =>

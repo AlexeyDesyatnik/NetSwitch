@@ -24,7 +24,7 @@ namespace NetSwitch.UI
         private readonly Func<Report> _buildReport;
         private readonly IPrompts _prompts;
 
-        private readonly ListView _adapters = new ListView();
+        private readonly ColoredListView _adapters = new ColoredListView();
         private readonly ListViewGroup _physical = new ListViewGroup("Физические");
         private readonly ListViewGroup _virtual = new ListViewGroup("Виртуальные");
         private readonly CheckBox _showVirtual = new CheckBox { Text = "Показать виртуальные", AutoSize = true, Anchor = AnchorStyles.Right };
