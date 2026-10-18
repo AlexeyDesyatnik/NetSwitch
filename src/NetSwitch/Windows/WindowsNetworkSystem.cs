@@ -1,12 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Management;
+using System.Threading;
 using NetSwitch.Model;
 
 namespace NetSwitch.Windows
 {
     internal sealed class WindowsNetworkSystem : INetworkSystem
     {
+        private const int SettleTimeoutMs = 5000;
+        private const int SettlePollMs = 300;
+
         public IList<Adapter> ReadAdapters()
         {
             return AdapterReader.ReadAll();
@@ -41,7 +45,7 @@ namespace NetSwitch.Windows
 
             // netsh иногда сообщает об ошибке, сделав дело (например, «DHCP уже включён»), и наоборот.
             // Поэтому верим не коду возврата, а тому, что в итоге записано на адаптере.
-            if (ReadConfigured(adapter).SameAs(settings)) return;
+            if (Settles(adapter, settings)) return;
 
             throw new InvalidOperationException(failures.Count > 0
                 ? string.Join(" ", failures)
@@ -71,6 +75,20 @@ namespace NetSwitch.Windows
             {
                 failures.Add("Windows не смогла включить DHCP на адаптере «" + adapter.Name + "»: " + e.Message);
             }
+        }
+
+        /// <summary>
+        /// Только что включённый адаптер подключается несколько секунд, и всё это время Windows переписывает
+        /// его настройки в реестре (#9). Поэтому несовпадение перепроверяем, пока оно не устоится.
+        /// </summary>
+        private static bool Settles(Adapter adapter, Ipv4Settings settings)
+        {
+            for (int waited = 0; !ReadConfigured(adapter).SameAs(settings); waited += SettlePollMs)
+            {
+                if (waited >= SettleTimeoutMs) return false;
+                Thread.Sleep(SettlePollMs);
+            }
+            return true;
         }
 
         /// <returns>true, если все команды выполнились успешно.</returns>

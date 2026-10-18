@@ -100,9 +100,13 @@ namespace NetSwitch.Tests
             Assert.Empty(settings.Dns);
         }
 
-        [Fact]
-        public void Manual_settings_waiting_for_connection_are_read_as_manual()
+        [Theory]
+        [InlineData(false)]
+        // Только что включённый адаптер с кабелем несколько секунд подключается (#9)
+        [InlineData(true)]
+        public void Manual_settings_waiting_for_connection_are_read_as_manual(bool connecting)
         {
+            AdapterState state = connecting ? AdapterState.Connecting : AdapterState.NoLink;
             // Так Windows записывает ручные настройки на адаптере с вынутым кабелем
             var values = new TcpipInterfaceValues
             {
@@ -114,7 +118,7 @@ namespace NetSwitch.Tests
                 NameServer = "192.168.10.1,192.168.10.2"
             };
 
-            Ipv4Settings settings = TcpipRegistry.ToSettings(values, AdapterState.NoLink);
+            Ipv4Settings settings = TcpipRegistry.ToSettings(values, state);
 
             Assert.False(settings.AutoAddress);
             Assert.Equal("192.168.10.50", settings.Address);
